@@ -4,8 +4,16 @@
 //! Models can optionally have additional helper methods compiled, by enabling
 //! the `model` feature.
 
-#[macro_use]
-mod utils;
+#[macro_use] extern crate bitflags;
+#[macro_use] extern crate serde_derive;
+
+extern crate chrono;
+extern crate serde;
+extern crate serde_json;
+extern crate serenity_common;
+
+#[macro_use] mod internal;
+#[macro_use] mod utils;
 
 pub mod event;
 pub mod permissions;
@@ -32,13 +40,12 @@ pub use self::voice::*;
 pub use self::webhook::*;
 
 use chrono::NaiveDateTime;
-use internal::prelude::*;
-use parking_lot::RwLock;
+use serenity_common::prelude::*;
 use self::utils::*;
-use serde::de::Visitor;
+use serde::de::{Deserialize, Deserializer, Visitor};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::Arc;
+use std::result::Result as StdResult;
 
 #[cfg(feature = "utils")]
 use utils::Colour;
@@ -49,8 +56,8 @@ macro_rules! id_u64 {
     ($(#[$attr:meta] $name:ident;)*) => {
         $(
             #[$attr]
+            #[cfg_attr(feature = "cargo-clippy", allow(derive_hash_xor_eq))]
             #[derive(Copy, Clone, Default, Debug, Eq, Hash, PartialOrd, Ord, Serialize)]
-            #[allow(derive_hash_xor_eq)]
             pub struct $name(pub u64);
 
             impl $name {
@@ -127,7 +134,7 @@ id_u64! {
 ///
 /// This is used to differentiate whether a guild itself can be used or whether
 /// a guild needs to be retrieved from the cache.
-#[allow(large_enum_variant)]
+#[cfg_attr(feature = "cargo-clippy", allow(large_enum_variant))]
 #[derive(Clone, Debug)]
 pub enum GuildContainer {
     /// A guild which can have its contents directly searched.
@@ -253,12 +260,4 @@ impl Region {
             Region::VipUsWest => "vip-us-west",
         }
     }
-}
-
-use serde::{Deserialize, Deserializer};
-use std::result::Result as StdResult;
-
-fn deserialize_sync_user<'de, D: Deserializer<'de>>(deserializer: D)
-                                                    -> StdResult<Arc<RwLock<User>>, D::Error> {
-    Ok(Arc::new(RwLock::new(User::deserialize(deserializer)?)))
 }

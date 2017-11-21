@@ -1,11 +1,5 @@
-#[cfg(feature = "model")]
-use builder::CreateEmbed;
-#[cfg(feature = "model")]
-use internal::prelude::*;
 #[cfg(feature = "utils")]
-use utils::Colour;
-#[cfg(feature = "model")]
-use utils;
+use serenity_utils::Colour;
 
 /// Represents a rich embed which allows using richer markdown, multiple fields
 /// and more. This was heavily inspired by [slack's attachments].
@@ -65,35 +59,6 @@ pub struct Embed {
     pub video: Option<EmbedVideo>,
 }
 
-#[cfg(feature = "model")]
-impl Embed {
-    /// Creates a fake Embed, giving back a `serde_json` map.
-    ///
-    /// This should only be useful in conjunction with [`Webhook::execute`].
-    ///
-    /// [`Webhook::execute`]: struct.Webhook.html
-    ///
-    /// # Examples
-    ///
-    /// Create an embed:
-    ///
-    /// ```rust,no_run
-    /// use serenity::model::Embed;
-    ///
-    /// let embed = Embed::fake(|e| e
-    ///     .title("Embed title")
-    ///     .description("Making a basic embed")
-    ///     .field("A field", "Has some content.", false));
-    /// ```
-    #[inline]
-    pub fn fake<F>(f: F) -> Value
-        where F: FnOnce(CreateEmbed) -> CreateEmbed {
-        let map = utils::hashmap_to_json_map(f(CreateEmbed::default()).0);
-
-        Value::Object(map)
-    }
-}
-
 /// An author object in an embed.
 #[derive(Clone, Debug, Deserialize)]
 pub struct EmbedAuthor {
@@ -122,24 +87,6 @@ pub struct EmbedField {
     ///
     /// The maxiumum length of this field is 1024 unicode codepoints.
     pub value: String,
-}
-
-impl EmbedField {
-    /// Creates a new embed field.
-    ///
-    /// **Note**: Refer to the [`name`] and [`value`] documentation for maximum
-    /// lengths.
-    ///
-    /// [`name`]: #structfield.name
-    /// [`value`]: #structfield.value
-    pub fn new<T, U>(name: T, value: U, inline: bool) -> Self
-        where T: Into<String>, U: Into<String> {
-        Self {
-            name: name.into(),
-            value: value.into(),
-            inline,
-        }
-    }
 }
 
 /// Footer information for an embed.

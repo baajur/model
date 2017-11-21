@@ -1,7 +1,5 @@
-use parking_lot::RwLock;
 use serde::de::Error as DeError;
 use serde_json;
-use std::sync::Arc;
 use super::utils::*;
 use super::*;
 
@@ -33,127 +31,6 @@ pub struct Game {
     /// [`GameType::Streaming`]: enum.GameType.html#variant.Streaming
     /// [`kind`]: #structfield.kind
     pub url: Option<String>,
-}
-
-#[cfg(feature = "model")]
-impl Game {
-    /// Creates a `Game` struct that appears as a `Playing <name>` status.
-    ///
-    /// **Note**: Maximum `name` length is 128.
-    ///
-    /// # Examples
-    ///
-    /// Create a command that sets the current game being played:
-    ///
-    /// ```rust,no_run
-    /// # #[macro_use] extern crate serenity;
-    /// #
-    /// use serenity::framework::standard::Args;
-    /// use serenity::model::Game;
-    ///
-    /// command!(game(ctx, _msg, args) {
-    ///     let name = args.join(" ");
-    ///     ctx.set_game(Game::playing(&name));
-    /// });
-    /// #
-    /// # fn main() {}
-    /// ```
-    pub fn playing(name: &str) -> Game {
-        Game {
-            kind: GameType::Playing,
-            name: name.to_string(),
-            url: None,
-        }
-    }
-
-    /// Creates a `Game` struct that appears as a `Streaming <name>` status.
-    ///
-    /// **Note**: Maximum `name` length is 128.
-    ///
-    /// # Examples
-    ///
-    /// Create a command that sets the current game and stream:
-    ///
-    /// ```rust,no_run
-    /// # #[macro_use] extern crate serenity;
-    /// #
-    /// use serenity::framework::standard::Args;
-    /// use serenity::model::Game;
-    ///
-    /// // Assumes command has min_args set to 2.
-    /// command!(stream(ctx, _msg, args) {
-    ///     # let stream_url = String::from("");
-    ///     let name = args.full();
-    ///     ctx.set_game(Game::streaming(&name, &stream_url));
-    /// });
-    /// #
-    /// # fn main() {}
-    /// ```
-    pub fn streaming(name: &str, url: &str) -> Game {
-        Game {
-            kind: GameType::Streaming,
-            name: name.to_string(),
-            url: Some(url.to_string()),
-        }
-    }
-
-    /// Creates a `Game` struct that appears as a `Listening to <name>` status.
-    ///
-    /// **Note**: Maximum `name` length is 128.
-    ///
-    /// # Examples
-    ///
-    /// Create a command that sets the current game being played:
-    ///
-    /// ```rust,no_run
-    /// # #[macro_use] extern crate serenity;
-    /// #
-    /// use serenity::framework::standard::Args;
-    /// use serenity::model::Game;
-    ///
-    /// command!(listen(ctx, _msg, args) {
-    ///     let name = args.join(" ");
-    ///     ctx.set_game(Game::listening(&name));
-    /// });
-    /// #
-    /// # fn main() {}
-    /// ```
-    pub fn listening(name: &str) -> Game {
-        Game {
-            kind: GameType::Listening,
-            name: name.to_string(),
-            url: None,
-        }
-    }
-
-    /// Creates a `Game` struct that appears as a `Watching <name>` status.
-    ///
-    /// **Note**: Maximum `name` length is 128.
-    ///
-    /// # Examples
-    ///
-    /// Create a command that sets the current game being played:
-    ///
-    /// ```rust,no_run
-    /// # #[macro_use] extern crate serenity;
-    /// #
-    /// use serenity::framework::standard::Args;
-    /// use serenity::model::Game;
-    ///
-    /// command!(watch(ctx, _msg, args) {
-    ///     let name = args.join(" ");
-    ///     ctx.set_game(Game::watching(&name));
-    /// });
-    /// #
-    /// # fn main() {}
-    /// ```
-    pub fn watching(name: &str) -> Game {
-        Game {
-            kind: GameType::Watching,
-            name: name.to_string(),
-            url: None,
-        }
-    }
 }
 
 impl<'de> Deserialize<'de> for Game {
@@ -224,7 +101,7 @@ pub struct Presence {
     /// date.
     pub user_id: UserId,
     /// The associated user instance.
-    pub user: Option<Arc<RwLock<User>>>,
+    pub user: Option<User>,
 }
 
 impl<'de> Deserialize<'de> for Presence {
@@ -239,7 +116,7 @@ impl<'de> Deserialize<'de> for Presence {
             let user = User::deserialize(Value::Object(user_map))
                 .map_err(DeError::custom)?;
 
-            (user.id, Some(Arc::new(RwLock::new(user))))
+            (user.id, Some(user))
         } else {
             let user_id = user_map
                 .remove("id")

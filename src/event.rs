@@ -2,17 +2,15 @@
 
 use chrono::{DateTime, FixedOffset};
 use serde::de::Error as DeError;
-use serde_json;
+use serde_json::{self, Error as JsonError, Value};
 use std::collections::HashMap;
 use super::utils::deserialize_emojis;
 use super::*;
-use constants::{OpCode, VoiceOpCode};
-use internal::prelude::*;
+use serenity_common::constants::{OpCode, VoiceOpCode};
+use serenity_common::prelude::*;
 
 #[cfg(feature = "cache")]
 use cache::{Cache, CacheUpdate};
-#[cfg(feature = "cache")]
-use internal::RwLockExt;
 #[cfg(feature = "cache")]
 use std::collections::hash_map::Entry;
 #[cfg(feature = "cache")]
@@ -1048,7 +1046,7 @@ pub struct WebhookUpdateEvent {
     pub guild_id: GuildId,
 }
 
-#[allow(large_enum_variant)]
+#[cfg_attr(feature = "cargo-clippy", allow(large_enum_variant))]
 #[derive(Debug, Clone)]
 pub enum GatewayEvent {
     Dispatch(u64, Event),
@@ -1081,8 +1079,8 @@ impl<'de> Deserialize<'de> for GatewayEvent {
                     .and_then(EventType::deserialize)
                     .map_err(DeError::custom)?;
                 let payload = map.remove("d").ok_or_else(|| {
-                    Error::Decode("expected gateway event d", Value::Object(map))
-                }).map_err(DeError::custom)?;
+                    DeError::custom("expected gateway event d")
+                })?;
 
                 let x = deserialize_event_with_type(kind, payload).unwrap();
 
@@ -1126,7 +1124,7 @@ impl<'de> Deserialize<'de> for GatewayEvent {
 }
 
 /// Event received over a websocket connection
-#[allow(large_enum_variant)]
+#[cfg_attr(feature = "cargo-clippy", allow(large_enum_variant))]
 #[derive(Clone, Debug, Deserialize)]
 pub enum Event {
     /// A [`Channel`] was created.
@@ -1258,7 +1256,8 @@ pub enum Event {
 /// [`EventType::GuildDelete`]: enum.EventType.html#variant.GuildDelete
 /// [`ChannelCreateEvent`]: struct.ChannelCreateEvent.html
 /// [`GuildUnavailableEvent`]: struct.GuildUnavailableEvent.html
-pub fn deserialize_event_with_type(kind: EventType, v: Value) -> Result<Event> {
+pub fn deserialize_event_with_type(kind: EventType, v: Value)
+    -> Result<Event, JsonError> {
     Ok(match kind {
         EventType::ChannelCreate => Event::ChannelCreate(serde_json::from_value(v)?),
         EventType::ChannelDelete => Event::ChannelDelete(serde_json::from_value(v)?),

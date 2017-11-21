@@ -1,7 +1,5 @@
-use parking_lot::RwLock;
 use serde::de::Error as DeError;
 use std::collections::HashMap;
-use std::sync::Arc;
 use super::*;
 
 #[cfg(feature = "cache")]
@@ -27,12 +25,12 @@ pub fn deserialize_emojis<'de, D: Deserializer<'de>>(
 
 pub fn deserialize_guild_channels<'de, D: Deserializer<'de>>(
     deserializer: D)
-    -> StdResult<HashMap<ChannelId, Arc<RwLock<GuildChannel>>>, D::Error> {
+    -> StdResult<HashMap<ChannelId, GuildChannel>, D::Error> {
     let vec: Vec<GuildChannel> = Deserialize::deserialize(deserializer)?;
     let mut map = HashMap::new();
 
     for channel in vec {
-        map.insert(channel.id, Arc::new(RwLock::new(channel)));
+        map.insert(channel.id, channel);
     }
 
     Ok(map)
@@ -45,7 +43,7 @@ pub fn deserialize_members<'de, D: Deserializer<'de>>(
     let mut members = HashMap::new();
 
     for member in vec {
-        let user_id = member.user.read().id;
+        let user_id = member.user.id;
 
         members.insert(user_id, member);
     }
@@ -74,8 +72,8 @@ pub fn deserialize_private_channels<'de, D: Deserializer<'de>>(
 
     for private_channel in vec {
         let id = match private_channel {
-            Channel::Group(ref group) => group.read().channel_id,
-            Channel::Private(ref channel) => channel.read().id,
+            Channel::Group(ref group) => group.channel_id,
+            Channel::Private(ref channel) => channel.id,
             Channel::Guild(_) => unreachable!("Guild private channel decode"),
             Channel::Category(_) => unreachable!("Channel category private channel decode"),
         };
@@ -101,7 +99,7 @@ pub fn deserialize_roles<'de, D: Deserializer<'de>>(
 
 pub fn deserialize_single_recipient<'de, D: Deserializer<'de>>(
     deserializer: D)
-    -> StdResult<Arc<RwLock<User>>, D::Error> {
+    -> StdResult<User, D::Error> {
     let mut users: Vec<User> = Deserialize::deserialize(deserializer)?;
     let user = if users.is_empty() {
         return Err(DeError::custom("Expected a single recipient"));
@@ -109,20 +107,7 @@ pub fn deserialize_single_recipient<'de, D: Deserializer<'de>>(
         users.remove(0)
     };
 
-    Ok(Arc::new(RwLock::new(user)))
-}
-
-pub fn deserialize_users<'de, D: Deserializer<'de>>(
-    deserializer: D)
-    -> StdResult<HashMap<UserId, Arc<RwLock<User>>>, D::Error> {
-    let vec: Vec<User> = Deserialize::deserialize(deserializer)?;
-    let mut users = HashMap::new();
-
-    for user in vec {
-        users.insert(user.id, Arc::new(RwLock::new(user)));
-    }
-
-    Ok(users)
+    Ok(user)
 }
 
 pub fn deserialize_u16<'de, D: Deserializer<'de>>(deserializer: D) -> StdResult<u16, D::Error> {
