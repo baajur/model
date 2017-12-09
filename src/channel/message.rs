@@ -1,5 +1,6 @@
 use chrono::{DateTime, FixedOffset};
 use serde_json::Value;
+use serenity_common::constants;
 use ::*;
 
 #[cfg(feature = "model")]
@@ -63,6 +64,30 @@ pub struct Message {
     pub tts: bool,
     /// The Id of the webhook that sent this message, if one did.
     pub webhook_id: Option<WebhookId>,
+}
+
+impl Message {
+    pub fn transform_content(&mut self) {
+        match self.kind {
+            MessageType::PinsAdd => {
+                self.content = format!(
+                    "{} pinned a message to this channel. See all the pins.",
+                    self.author
+                );
+            },
+            MessageType::MemberJoin => {
+                let sec = self.timestamp.timestamp() as usize;
+                let chosen = constants::JOIN_MESSAGES[sec % constants::JOIN_MESSAGES.len()];
+
+                self.content = if chosen.contains("$user") {
+                    chosen.replace("$user", &self.author.mention())
+                } else {
+                    chosen.to_string()
+                };
+            },
+            _ => {},
+        }
+    }
 }
 
 impl From<Message> for MessageId {
