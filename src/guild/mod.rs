@@ -128,6 +128,488 @@ pub struct Guild {
     pub voice_states: HashMap<UserId, VoiceState>,
 }
 
+impl Guild {
+    /// Calculate a [`Member`]'s permissions in the guild.
+    ///
+    /// [`Member`]: struct.Member.html
+    pub fn member_permissions<U>(&self, user_id: U) -> Permissions
+        where U: Into<UserId> {
+        let user_id = user_id.into();
+
+        if user_id == self.owner_id {
+            return Permissions::all();
+        }
+
+        let everyone = match self.roles.get(&RoleId(self.id.0)) {
+            Some(everyone) => everyone,
+            None => {
+                error!(
+                    "(╯°□°）╯︵ ┻━┻ @everyone role ({}) missing in '{}'",
+                    self.id,
+                    self.name,
+                );
+
+                return Permissions::empty();
+            },
+        };
+
+        let member = match self.members.get(&user_id) {
+            Some(member) => member,
+            None => return everyone.permissions,
+        };
+
+        let mut permissions = everyone.permissions;
+
+        for role in &member.roles {
+            if let Some(role) = self.roles.get(&role) {
+                if role.permissions.contains(Permissions::ADMINISTRATOR) {
+                    return Permissions::all();
+                }
+
+                permissions |= role.permissions;
+            } else {
+                warn!(
+                    "(╯°□°）╯︵ ┻━┻ {} on {} has non-existent role {:?}",
+                    member.user.id,
+                    self.id,
+                    role,
+                );
+            }
+        }
+
+        permissions
+    }
+
+    /// Gets a list of all the members (satisfying the status provided to the function) in this
+    /// guild.
+    pub fn members_with_status(&self, status: OnlineStatus) -> Vec<&Member> {
+        let mut members = vec![];
+
+        for (&id, member) in &self.members {
+            match self.presences.get(&id) {
+                Some(presence) => if status == presence.status {
+                    members.push(member);
+                },
+                None => continue,
+            }
+        }
+
+        members
+    }
+
+    /// Retrieves the first [`Member`] found that matches the name - with an
+    /// optional discriminator - provided.
+    ///
+    /// Searching with a discriminator given is the most precise form of lookup,
+    /// as no two people can share the same username *and* discriminator.
+    ///
+    /// If a member can not be found by username or username#discriminator,
+    /// then a search will be done for the nickname. When searching by nickname,
+    /// the hash (`#`) and everything after it is included in the search.
+    ///
+    /// The following are valid types of searches:
+    ///
+    /// - **username**: "zey"
+    /// - **username and discriminator**: "zey#5479"
+    /// - **nickname**: "zeyla" or "zeylas#nick"
+    ///
+    /// [`Member`]: struct.Member.html
+    pub fn member_named(&self, name: &str) -> Option<&Member> {
+        let (name, discrim) = if let Some(pos) = name.find('#') {
+            let split = name.split_at(pos);
+
+            match split.1.parse::<u16>() {
+                Ok(discrim_int) => (split.0, Some(discrim_int)),
+                Err(_) => (name, None),
+            }
+        } else {
+            (&name[..], None)
+        };
+
+        self.members
+            .values()
+            .find(|member| {
+                let name_matches = member.user.name == name;
+                let discrim_matches = match discrim {
+                    Some(discrim) => member.user.discriminator == discrim,
+                    None => true,
+                };
+
+                name_matches && discrim_matches
+            })
+            .or_else(|| {
+                self.members.values().find(|member| {
+                    member.nick.as_ref().map_or(false, |nick| nick == name)
+                })
+            })
+    }
+
+    /// Retrieves all [`Member`] that start with a given `String`.
+    ///
+    /// `sorted` decides whether the best early match of the `prefix`
+    /// should be the criteria to sort the result.
+    /// For the `prefix` "zey" and the unsorted result:
+    /// - "zeya", "zeyaa", "zeyla", "zeyzey", "zeyzeyzey"
+    /// It would be sorted:
+    /// - "zeya", "zeyaa", "zeyla", "zeyzey", "zeyzeyzey"
+    ///
+    /// [`Member`]: struct.Member.html
+    pub fn members_starting_with(&self, prefix: &str, case_sensitive: bool, sorted: bool) -> Vec<&Member> {
+        let mut members: Vec<&Member> = self.members
+            .values()
+            .filter(|member|
+
+                if case_sensitive {
+                    member.user.name.starts_with(prefix)
+                } else {
+                    starts_with_case_insensitive(&member.user.name, prefix)
+                }
+
+                || member.nick.as_ref()
+                    .map_or(false, |nick|
+
+                    if case_sensitive {
+                        nick.starts_with(prefix)
+                    } else {
+                        starts_with_case_insensitive(nick, prefix)
+                    })).collect();
+
+        if sorted {
+            members
+                .sort_by(|a, b| {
+                    let name_a = match a.nick {
+                        Some(ref nick) => {
+                            if contains_case_insensitive(&a.user.name[..], prefix) {
+                                a.user.name.clone()
+                            } else {
+                                nick.clone()
+                            }
+                        },
+                        None => a.user.name.clone(),
+                    };
+
+                    let name_b = match b.nick {
+                        Some(ref nick) => {
+                            if contains_case_insensitive(&b.user.name[..], prefix) {
+                                b.user.name.clone()
+                            } else {
+                                nick.clone()
+                            }
+                        },
+                        None => b.user.name.clone(),
+                    };
+
+                    closest_to_origin(prefix, &name_a[..], &name_b[..])
+                });
+            members
+        } else {
+            members
+        }
+    }
+
+    /// Retrieves all [`Member`] containing a given `String` as
+    /// either username or nick, with a priority on username.
+    ///
+    /// If the substring is "yla", following results are possible:
+    /// - "zeyla", "meiyla", "yladenisyla"
+    /// If 'case_sensitive' is false, the following are not found:
+    /// - "zeYLa", "meiyLa", "LYAdenislyA"
+    ///
+    /// `sorted` decides whether the best early match of the search-term
+    /// should be the criteria to sort the result.
+    /// It will look at the account name first, if that does not fit the
+    /// search-criteria `substring`, the display-name will be considered.
+    /// For the `substring` "zey" and the unsorted result:
+    /// - "azey", "zey", "zeyla", "zeylaa", "zeyzeyzey"
+    /// It would be sorted:
+    /// - "zey", "azey", "zeyla", "zeylaa", "zeyzeyzey"
+    ///
+    /// **Note**: Due to two fields of a `Member` being candidates for
+    /// the searched field, setting `sorted` to `true` will result in an overhead,
+    /// as both fields have to be considered again for sorting.
+    ///
+    /// [`Member`]: struct.Member.html
+    pub fn members_containing(&self, substring: &str, case_sensitive: bool, sorted: bool) -> Vec<&Member> {
+        let mut members: Vec<&Member> = self.members
+            .values()
+            .filter(|member|
+
+                if case_sensitive {
+                    member.user.name.contains(substring)
+                } else {
+                    contains_case_insensitive(&member.user.name, substring)
+                }
+
+                || member.nick.as_ref()
+                    .map_or(false, |nick| {
+
+                        if case_sensitive {
+                            nick.contains(substring)
+                        } else {
+                            contains_case_insensitive(nick, substring)
+                        }
+                    })).collect();
+
+        if sorted {
+            members
+                .sort_by(|a, b| {
+                    let name_a = match a.nick {
+                        Some(ref nick) => {
+                            if contains_case_insensitive(&a.user.name[..], substring) {
+                                a.user.name.clone()
+                            } else {
+                                nick.clone()
+                            }
+                        },
+                        None => a.user.name.clone(),
+                    };
+
+                    let name_b = match b.nick {
+                        Some(ref nick) => {
+                            if contains_case_insensitive(&b.user.name[..], substring) {
+                                b.user.name.clone()
+                            } else {
+                                nick.clone()
+                            }
+                        },
+                        None => b.user.name.clone(),
+                    };
+
+                    closest_to_origin(substring, &name_a[..], &name_b[..])
+                });
+            members
+        } else {
+            members
+        }
+    }
+
+    /// Retrieves all [`Member`] containing a given `String` in
+    /// their username.
+    ///
+    /// If the substring is "yla", following results are possible:
+    /// - "zeyla", "meiyla", "yladenisyla"
+    /// If 'case_sensitive' is false, the following are not found:
+    /// - "zeYLa", "meiyLa", "LYAdenislyA"
+    ///
+    /// `sort` decides whether the best early match of the search-term
+    /// should be the criteria to sort the result.
+    /// For the `substring` "zey" and the unsorted result:
+    /// - "azey", "zey", "zeyla", "zeylaa", "zeyzeyzey"
+    /// It would be sorted:
+    /// - "zey", "azey", "zeyla", "zeylaa", "zeyzeyzey"
+    ///
+    /// [`Member`]: struct.Member.html
+    pub fn members_username_containing(&self, substring: &str, case_sensitive: bool, sorted: bool) -> Vec<&Member> {
+        let mut members: Vec<&Member> = self.members
+            .values()
+            .filter(|member| {
+                if case_sensitive {
+                    member.user.name.contains(substring)
+                } else {
+                    contains_case_insensitive(&member.user.name, substring)
+                }
+            }).collect();
+
+        if sorted {
+            members
+                .sort_by(|a, b| {
+                    let name_a = &a.user.name;
+                    let name_b = &b.user.name;
+                    closest_to_origin(substring, &name_a[..], &name_b[..])
+                });
+            members
+        } else {
+            members
+        }
+    }
+
+    /// Retrieves all [`Member`] containing a given `String` in
+    /// their nick.
+    ///
+    /// If the substring is "yla", following results are possible:
+    /// - "zeyla", "meiyla", "yladenisyla"
+    /// If 'case_sensitive' is false, the following are not found:
+    /// - "zeYLa", "meiyLa", "LYAdenislyA"
+    ///
+    /// `sort` decides whether the best early match of the search-term
+    /// should be the criteria to sort the result.
+    /// For the `substring` "zey" and the unsorted result:
+    /// - "azey", "zey", "zeyla", "zeylaa", "zeyzeyzey"
+    /// It would be sorted:
+    /// - "zey", "azey", "zeyla", "zeylaa", "zeyzeyzey"
+    ///
+    /// **Note**: Instead of panicing, when sorting does not find
+    /// a nick, the username will be used (this should never happen).
+    ///
+    /// [`Member`]: struct.Member.html
+    pub fn members_nick_containing(&self, substring: &str, case_sensitive: bool, sorted: bool) -> Vec<&Member> {
+        let mut members: Vec<&Member> = self.members
+            .values()
+            .filter(|member|
+                member.nick.as_ref()
+                    .map_or(false, |nick| {
+
+                        if case_sensitive {
+                            nick.contains(substring)
+                        } else {
+                            contains_case_insensitive(nick, substring)
+                        }
+                    })).collect();
+
+        if sorted {
+            members
+                .sort_by(|a, b| {
+                    let name_a = match a.nick {
+                        Some(ref nick) => {
+                            nick.clone()
+                        },
+                        None => a.user.name.clone(),
+                    };
+
+                    let name_b = match b.nick {
+                        Some(ref nick) => {
+                                nick.clone()
+                            },
+                        None => b.user.name.clone(),
+                    };
+
+                    closest_to_origin(substring, &name_a[..], &name_b[..])
+                });
+            members
+        } else {
+            members
+        }
+    }
+
+    /// Calculate a [`User`]'s permissions in a given channel in the guild.
+    ///
+    /// [`User`]: struct.User.html
+    pub fn permissions_in<C, U>(&self, channel_id: C, user_id: U) -> Permissions
+        where C: Into<ChannelId>, U: Into<UserId> {
+        let user_id = user_id.into();
+
+        // The owner has all permissions in all cases.
+        if user_id == self.owner_id {
+            return Permissions::all();
+        }
+
+        let channel_id = channel_id.into();
+
+        // Start by retrieving the @everyone role's permissions.
+        let everyone = match self.roles.get(&RoleId(self.id.0)) {
+            Some(everyone) => everyone,
+            None => {
+                error!(
+                    "(╯°□°）╯︵ ┻━┻ @everyone role ({}) missing in '{}'",
+                    self.id,
+                    self.name
+                );
+
+                return Permissions::empty();
+            },
+        };
+
+        // Create a base set of permissions, starting with `@everyone`s.
+        let mut permissions = everyone.permissions;
+
+        let member = match self.members.get(&user_id) {
+            Some(member) => member,
+            None => return everyone.permissions,
+        };
+
+        for &role in &member.roles {
+            if let Some(role) = self.roles.get(&role) {
+                permissions |= role.permissions;
+            } else {
+                warn!(
+                    "(╯°□°）╯︵ ┻━┻ {} on {} has non-existent role {:?}",
+                    member.user.id,
+                    self.id,
+                    role
+                );
+            }
+        }
+
+        // Administrators have all permissions in any channel.
+        if permissions.contains(Permissions::ADMINISTRATOR) {
+            return Permissions::all();
+        }
+
+        if let Some(channel) = self.channels.get(&channel_id) {
+            // If this is a text channel, then throw out voice permissions.
+            if channel.kind == ChannelType::Text {
+                permissions &= !(Permissions::CONNECT
+                    | Permissions::SPEAK
+                    | Permissions::MUTE_MEMBERS
+                    | Permissions::DEAFEN_MEMBERS
+                    | Permissions::MOVE_MEMBERS
+                    | Permissions::USE_VAD);
+            }
+
+            // Apply the permission overwrites for the channel for each of the
+            // overwrites that - first - applies to the member's roles, and then
+            // the member itself.
+            //
+            // First apply the denied permission overwrites for each, then apply
+            // the allowed.
+
+            // Roles
+            for overwrite in &channel.permission_overwrites {
+                if let PermissionOverwriteType::Role(role) = overwrite.kind {
+                    if role.0 != self.id.0 && !member.roles.contains(&role) {
+                        continue;
+                    }
+
+                    permissions = (permissions & !overwrite.deny) | overwrite.allow;
+                }
+            }
+
+            // Member
+            for overwrite in &channel.permission_overwrites {
+                if PermissionOverwriteType::Member(user_id) != overwrite.kind {
+                    continue;
+                }
+
+                permissions = (permissions & !overwrite.deny) | overwrite.allow;
+            }
+        } else {
+            warn!(
+                "(╯°□°）╯︵ ┻━┻ Guild {} does not contain channel {}",
+                self.id,
+                channel_id
+            );
+        }
+
+        // The default channel is always readable.
+        if channel_id.0 == self.id.0 {
+            permissions |= Permissions::READ_MESSAGES;
+        }
+
+        // No SEND_MESSAGES => no message-sending-related actions
+        // If the member does not have the `SEND_MESSAGES` permission, then
+        // throw out message-able permissions.
+        if !permissions.contains(Permissions::SEND_MESSAGES) {
+            permissions &= !(Permissions::SEND_TTS_MESSAGES
+                | Permissions::MENTION_EVERYONE
+                | Permissions::EMBED_LINKS
+                | Permissions::ATTACH_FILES);
+        }
+
+        // If the member does not have the `READ_MESSAGES` permission, then
+        // throw out actionable permissions.
+        if !permissions.contains(Permissions::READ_MESSAGES) {
+            permissions &= Permissions::KICK_MEMBERS
+                | Permissions::BAN_MEMBERS
+                | Permissions::ADMINISTRATOR
+                | Permissions::MANAGE_GUILD
+                | Permissions::CHANGE_NICKNAME
+                | Permissions::MANAGE_NICKNAMES;
+        }
+
+        permissions
+    }
+}
+
 impl<'de> Deserialize<'de> for Guild {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> StdResult<Self, D::Error> {
         let mut map = JsonMap::deserialize(deserializer)?;
@@ -268,6 +750,37 @@ impl<'de> Deserialize<'de> for Guild {
             voice_states: voice_states,
         })
     }
+}
+
+/// Checks if a `&str` contains another `&str`.
+fn contains_case_insensitive(to_look_at: &str, to_find: &str) -> bool {
+    to_look_at.to_lowercase().contains(to_find)
+}
+
+/// Checks if a `&str` starts with another `&str`.
+fn starts_with_case_insensitive(to_look_at: &str, to_find: &str) -> bool {
+    to_look_at.to_lowercase().starts_with(to_find)
+}
+
+/// Takes a `&str` as `origin` and tests if either
+/// `word_a` or `word_b` is closer.
+///
+/// **Note**: Normally `word_a` and `word_b` are
+/// expected to contain `origin` as substring.
+/// If not, using `closest_to_origin` would sort these
+/// the end.
+fn closest_to_origin(origin: &str, word_a: &str, word_b: &str) -> std::cmp::Ordering {
+    let value_a = match word_a.find(origin) {
+        Some(value) => value + word_a.len(),
+        None => return std::cmp::Ordering::Greater,
+    };
+
+    let value_b = match word_b.find(origin) {
+        Some(value) => value + word_b.len(),
+        None => return std::cmp::Ordering::Less,
+    };
+
+    value_a.cmp(&value_b)
 }
 
 /// Information relating to a guild's widget embed.
